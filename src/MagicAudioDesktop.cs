@@ -183,6 +183,7 @@ namespace MagicAudioDesktop
             monitorOutputCheckBox = new CheckBox
             {
                 Text = "Play processed monitor output",
+                Checked = true,
                 Location = new Point(18, 54),
                 Size = new Size(270, 28),
                 ForeColor = ThemeText
@@ -576,6 +577,7 @@ namespace MagicAudioDesktop
         private void MagicSignatureButton_Click(object sender, EventArgs e)
         {
             ApplyMagicAcousticsPreset();
+            monitorOutputCheckBox.Checked = true;
             statusLabel.Text = "Applied Magic acoustics basic signature.";
         }
 
@@ -955,6 +957,7 @@ namespace MagicAudioDesktop
         private void ApplySelectedPeqPreset()
         {
             if (peqPresetCombo == null || peqBandsGrid == null) return;
+            monitorOutputCheckBox.Checked = true;
             var profile = PeqProfile.Find((string)peqPresetCombo.SelectedItem);
             peqPreampInput.Value = ClampDecimal((decimal)profile.PreampDb, peqPreampInput.Minimum, peqPreampInput.Maximum);
             peqBassBoostInput.Value = ClampDecimal((decimal)profile.BassBoostDb, peqBassBoostInput.Minimum, peqBassBoostInput.Maximum);
@@ -1062,9 +1065,10 @@ namespace MagicAudioDesktop
             if (autoEqListView == null || autoEqListView.SelectedItems.Count == 0) return;
             var profile = autoEqListView.SelectedItems[0].Tag as AutoEqProfile;
             if (profile == null) return;
+            monitorOutputCheckBox.Checked = true;
             peqConfigText.Text = profile.ConfigText;
             ImportPeqConfig();
-            peqStatusLabel.Text = "Applied AutoEQ: " + profile.Name;
+            peqStatusLabel.Text = "Applied AutoEQ: " + profile.Name + " - monitor audition on";
         }
 
         private static float ToFloat(object value, float fallback)
@@ -1442,8 +1446,8 @@ namespace MagicAudioDesktop
             float cancelLeft = rightBand.Low * LowBandCancel + rightBand.Mid * MidBandCancel + rightBand.High * HighBandCancel;
             float cancelRight = leftBand.Low * LowBandCancel + leftBand.Mid * MidBandCancel + leftBand.High * HighBandCancel;
 
-            left = (left - cancelLeft) * DefaultGain;
-            right = (right - cancelRight) * DefaultGain;
+            left = (left - cancelLeft * 1.35f) * DefaultGain;
+            right = (right - cancelRight * 1.35f) * DefaultGain;
 
             left = Compress(left);
             right = Compress(right);
@@ -1503,7 +1507,7 @@ namespace MagicAudioDesktop
             float lLong = leftLong.Process(left, longDelay);
             float rShort = rightShort.Process(right, shortDelay);
             float rLong = rightLong.Process(right, midDelay);
-            float wet = Math.Min(1.0f, amount) * 0.55f;
+            float wet = Math.Min(1.0f, amount) * 0.85f;
 
             float outL = left + wet * (lShort * 0.055f + rShort * 0.09f - rLong * 0.035f + lLong * 0.025f);
             float outR = right + wet * (rShort * 0.055f + lShort * 0.09f - lLong * 0.035f + rLong * 0.025f);
@@ -1553,11 +1557,11 @@ namespace MagicAudioDesktop
             // AREI in the extension routes virtual sources through HRTF
             // convolution with a 200 Hz crossover. This is the app-native
             // binaural monitor path that follows that graph shape.
-            float binauralLeft = lowLeft + highLeft * 0.86f + delayedRight * 0.22f;
-            float binauralRight = lowRight + highRight * 0.86f + delayedLeft * 0.22f;
+            float binauralLeft = lowLeft + highLeft * 0.78f + delayedRight * 0.34f;
+            float binauralRight = lowRight + highRight * 0.78f + delayedLeft * 0.34f;
 
-            left = (float)Math.Tanh(binauralLeft * 1.18f);
-            right = (float)Math.Tanh(binauralRight * 1.18f);
+            left = (float)Math.Tanh(binauralLeft * 1.28f);
+            right = (float)Math.Tanh(binauralRight * 1.28f);
         }
     }
 
@@ -1935,8 +1939,8 @@ namespace MagicAudioDesktop
         private BiquadFilter[] filters = new BiquadFilter[0];
         private int sampleRate = 48000;
         private readonly MagicAcousticSignatureDsp virtualizer = new MagicAcousticSignatureDsp();
-        private readonly OnePoleLowPass bassL = new OnePoleLowPass(100, 48000);
-        private readonly OnePoleLowPass bassR = new OnePoleLowPass(100, 48000);
+        private OnePoleLowPass bassL = new OnePoleLowPass(100, 48000);
+        private OnePoleLowPass bassR = new OnePoleLowPass(100, 48000);
 
         public PeqSettings Settings
         {
@@ -1953,6 +1957,8 @@ namespace MagicAudioDesktop
             if (newSampleRate <= 0 || newSampleRate == sampleRate) return;
             sampleRate = newSampleRate;
             virtualizer.Configure(sampleRate);
+            bassL = new OnePoleLowPass(100, sampleRate);
+            bassR = new OnePoleLowPass(100, sampleRate);
             RebuildFilters();
         }
 
@@ -1971,7 +1977,7 @@ namespace MagicAudioDesktop
 
             if (settings.BassBoostDb > 0)
             {
-                float bassGain = DbToGain(settings.BassBoostDb) - 1.0f;
+                float bassGain = (DbToGain(settings.BassBoostDb) - 1.0f) * 1.35f;
                 left += bassL.Process(left) * bassGain;
                 right += bassR.Process(right) * bassGain;
             }
@@ -1986,7 +1992,7 @@ namespace MagicAudioDesktop
 
             if (settings.VirtualizerStrength > 0)
             {
-                virtualizer.Process(ref left, ref right, settings.VirtualizerStrength / 100.0f);
+                virtualizer.Process(ref left, ref right, Math.Min(1.0f, settings.VirtualizerStrength / 75.0f));
             }
 
             if (settings.ReverbStrength > 0)
@@ -1999,7 +2005,7 @@ namespace MagicAudioDesktop
 
             if (settings.LoudnessDb > 0)
             {
-                float loud = DbToGain(settings.LoudnessDb);
+                float loud = DbToGain(settings.LoudnessDb * 1.2f);
                 left = (float)Math.Tanh(left * loud);
                 right = (float)Math.Tanh(right * loud);
             }
