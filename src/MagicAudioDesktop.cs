@@ -15,8 +15,14 @@ namespace MagicAudioDesktop
     internal static class Program
     {
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
+            if (args != null && args.Length > 0 && args[0].Equals("--diagnostics", StringComparison.OrdinalIgnoreCase))
+            {
+                AudioDiagnostics.Run(args);
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
@@ -2559,7 +2565,6 @@ namespace MagicAudioDesktop
         private const int ClsctxAll = 23;
         private const int AudclntSharemodeShared = 0;
         private const int AudclntStreamflagsLoopback = 0x00020000;
-        private const int AudclntStreamflagsEventcallback = 0x00040000;
         private const int BufferFlagsSilent = 0x00000002;
 
         private readonly AutoResetEvent frameEvent = new AutoResetEvent(false);
@@ -2571,6 +2576,7 @@ namespace MagicAudioDesktop
 
         public event EventHandler<AudioBufferEventArgs> AudioAvailable;
         public event EventHandler CaptureStopped;
+        public Exception LastError { get; private set; }
 
         public WasapiLoopbackCapture()
         {
@@ -2604,14 +2610,15 @@ namespace MagicAudioDesktop
 
                 while (running)
                 {
-                    frameEvent.WaitOne(250);
+                    Thread.Sleep(10);
                     DrainCaptureBuffer();
                 }
 
                 audioClient.Stop();
             }
-            catch
+            catch (Exception ex)
             {
+                LastError = ex;
             }
             finally
             {
@@ -2646,7 +2653,7 @@ namespace MagicAudioDesktop
             {
                 Marshal.ThrowExceptionForHR(audioClient.Initialize(
                     AudclntSharemodeShared,
-                    AudclntStreamflagsLoopback | AudclntStreamflagsEventcallback,
+                    AudclntStreamflagsLoopback,
                     bufferDuration,
                     0,
                     waveFormatPtr,
@@ -2656,8 +2663,6 @@ namespace MagicAudioDesktop
             {
                 Marshal.FreeHGlobal(waveFormatPtr);
             }
-
-            Marshal.ThrowExceptionForHR(audioClient.SetEventHandle(frameEvent.SafeWaitHandle.DangerousGetHandle()));
 
             Guid captureClientGuid = typeof(IAudioCaptureClient).GUID;
             object captureObj;
@@ -2725,6 +2730,194 @@ namespace MagicAudioDesktop
         public byte[] Buffer { get; private set; }
         public int BytesRecorded { get; private set; }
         public WaveFormat WaveFormat { get; private set; }
+    }
+
+    internal static class AudioDiagnostics
+    {
+        public static void Run(string[] args)
+        {
+            string reportPath = System.IO.Path.Combine(Environment.CurrentDirectory, "audio-diagnostics.txt");
+            var report = new System.Text.StringBuilder();
+            report.AppendLine("Windows PEQ App Audio Diagnostics");
+            report.AppendLine("Started: " + DateTime.Now.ToString("s"));
+            report.AppendLine();
+
+            try
+            {
+                RunSyntheticDspTests(report);
+                if (args.Length > 1 && args[1].Equals("--capture", StringComparison.OrdinalIgnoreCase))
+                {
+                    RunLiveCaptureTest(report, args.Length > 2 ? ParseInt(args[2], 8) : 8);
+                }
+            }
+            catch (Exception ex)
+            {
+                report.AppendLine("FAIL: diagnostics crashed: " + ex.Message);
+            }
+
+            System.IO.File.WriteAllText(reportPath, report.ToString());
+        }
+
+        private static void RunSyntheticDspTests(System.Text.StringBuilder report)
+        {
+            var format = new WaveFormat
+            {
+                AudioFormat = 3,
+                Channels = 2,
+                SampleRate = 48000,
+                BitsPerSample = 32,
+                BlockAlign = 8,
+                AverageBytesPerSecond = 384000,
+                ExtraSize = 0
+            };
+
+            byte[] input = CreateStereoFloatTestBuffer(format.SampleRate, 2.0);
+            var flat = new AudioProcessor { Volume = 1, Bass = 0, Treble = 0, Width = 1, Surround = 0, Compression = 0, Mode = ListeningMode.Speakers };
+            flat.PeqSettings = new PeqSettings { Enabled = false };
+            var flatResult = flat.Process(input, input.Length, format);
+
+            var magic = new AudioProcessor { Volume = 1, Bass = 0.35f, Treble = 0.35f, Width = 1.8f, Surround = 0.9f, Compression = 0.35f, Mode = ListeningMode.Headphones };
+            magic.PeqSettings = new PeqSettings { Enabled = false };
+            var magicResult = magic.Process(input, input.Length, format);
+            double magicDelta = AverageAbsDiff(flatResult.Pcm16Stereo, magicResult.Pcm16Stereo);
+            report.AppendLine((magicDelta > 250 ? "PASS" : "FAIL") + ": Magic acoustics changes signal, avg PCM delta=" + magicDelta.ToString("0.0"));
+
+            var peqProfile = PeqProfile.Find("Cinema");
+            var peqSettings = new PeqSettings
+            {
+                Enabled = true,
+                PreampDb = peqProfile.PreampDb,
+                BassBoostDb = peqProfile.BassBoostDb,
+                LoudnessDb = peqProfile.LoudnessDb,
+                StereoWidth = peqProfile.StereoWidth,
+                VirtualizerStrength = peqProfile.VirtualizerStrength,
+                ReverbStrength = peqProfile.ReverbStrength
+            };
+            foreach (var band in peqProfile.Bands) peqSettings.Bands.Add(band);
+
+            var peq = new AudioProcessor { Volume = 1, Bass = 0, Treble = 0, Width = 1, Surround = 0, Compression = 0, Mode = ListeningMode.Speakers, PeqSettings = peqSettings };
+            var peqResult = peq.Process(input, input.Length, format);
+            double peqDelta = AverageAbsDiff(flatResult.Pcm16Stereo, peqResult.Pcm16Stereo);
+            report.AppendLine((peqDelta > 250 ? "PASS" : "FAIL") + ": PEQ Cinema preset changes signal, avg PCM delta=" + peqDelta.ToString("0.0"));
+
+            AutoEqProfile[] autoEqProfiles = AutoEqProfile.BuiltIns();
+            report.AppendLine((autoEqProfiles.Length > 0 ? "PASS" : "FAIL") + ": AutoEQ list count=" + autoEqProfiles.Length);
+            var parsed = PeqConfigParser.Parse(autoEqProfiles[0].ConfigText);
+            report.AppendLine((parsed.Bands.Count > 0 ? "PASS" : "FAIL") + ": AutoEQ apply parser bands=" + parsed.Bands.Count + ", first=" + autoEqProfiles[0].Name);
+
+            var peqJson = "{\"pre_amp\":-4,\"bands\":[{\"on\":1,\"filter\":0,\"freq\":80,\"gain\":5,\"q\":0.7},{\"on\":1,\"filter\":1,\"freq\":3000,\"gain\":-3,\"q\":1.2}]}";
+            var parsedJson = PeqConfigParser.Parse(peqJson);
+            report.AppendLine((parsedJson.Bands.Count == 2 && Math.Abs(parsedJson.PreampDb + 4) < 0.01 ? "PASS" : "FAIL") + ": PEQ-AutoEQ JSON parser bands=" + parsedJson.Bands.Count);
+        }
+
+        private static void RunLiveCaptureTest(System.Text.StringBuilder report, int seconds)
+        {
+            report.AppendLine();
+            report.AppendLine("Live capture test: " + seconds + " seconds");
+            long bytes = 0;
+            double peakInput = 0;
+            double peakOutput = 0;
+            int callbacks = 0;
+            var processor = new AudioProcessor { Volume = 1.4f, Bass = 0.25f, Treble = 0.25f, Width = 1.6f, Surround = 0.7f, Compression = 0.3f, Mode = ListeningMode.Speakers };
+            var settings = PeqConfigParser.Parse(AutoEqProfile.BuiltIns()[0].ConfigText);
+            settings.Enabled = true;
+            settings.BassBoostDb = 4;
+            settings.LoudnessDb = 3;
+            settings.StereoWidth = 1.4f;
+            settings.VirtualizerStrength = 60;
+            processor.PeqSettings = settings;
+
+            Exception captureError;
+            bool fallbackToneUsed = false;
+            using (var capture = new WasapiLoopbackCapture())
+            {
+                capture.AudioAvailable += delegate(object sender, AudioBufferEventArgs e)
+                {
+                    callbacks++;
+                    bytes += e.BytesRecorded;
+                    var result = processor.Process(e.Buffer, e.BytesRecorded, e.WaveFormat);
+                    peakInput = Math.Max(peakInput, Math.Max(result.LeftInput, result.RightInput));
+                    peakOutput = Math.Max(peakOutput, Math.Max(result.LeftOutput, result.RightOutput));
+                };
+                capture.Start();
+                Thread.Sleep(Math.Max(1, seconds / 2) * 1000);
+                if (callbacks == 0)
+                {
+                    fallbackToneUsed = true;
+                    using (var player = new ProcessedAudioPlayer())
+                    {
+                        byte[] tone = CreateStereoPcm16Tone(48000, 0.2);
+                        for (int i = 0; i < 20; i++)
+                        {
+                            player.Play(tone, 48000);
+                            Thread.Sleep(100);
+                        }
+                    }
+                }
+                Thread.Sleep(Math.Max(1, seconds / 2) * 1000);
+                captureError = capture.LastError;
+            }
+
+            report.AppendLine((fallbackToneUsed ? "WARN" : "PASS") + ": Chrome/YouTube direct packets=" + (fallbackToneUsed ? "none, fallback tone used" : "present"));
+            report.AppendLine((callbacks > 0 ? "PASS" : "FAIL") + ": WASAPI callbacks=" + callbacks);
+            report.AppendLine((bytes > 0 ? "PASS" : "FAIL") + ": captured bytes=" + bytes);
+            report.AppendLine((captureError == null ? "PASS" : "FAIL") + ": WASAPI error=" + (captureError == null ? "none" : captureError.Message));
+            report.AppendLine((peakInput > 0.005 ? "PASS" : "WARN") + ": input peak meter=" + peakInput.ToString("0.000"));
+            report.AppendLine((peakOutput > 0.005 ? "PASS" : "WARN") + ": processed peak meter=" + peakOutput.ToString("0.000"));
+            report.AppendLine("Note: if input peak is WARN, Chrome/YouTube did not autoplay or the system output was silent.");
+        }
+
+        private static byte[] CreateStereoFloatTestBuffer(int sampleRate, double seconds)
+        {
+            int frames = (int)(sampleRate * seconds);
+            byte[] buffer = new byte[frames * 8];
+            for (int i = 0; i < frames; i++)
+            {
+                double t = i / (double)sampleRate;
+                float left = (float)(0.18 * Math.Sin(2 * Math.PI * 80 * t) + 0.16 * Math.Sin(2 * Math.PI * 1000 * t) + 0.11 * Math.Sin(2 * Math.PI * 9000 * t));
+                float right = (float)(0.15 * Math.Sin(2 * Math.PI * 100 * t + 0.4) + 0.13 * Math.Sin(2 * Math.PI * 1500 * t) + 0.10 * Math.Sin(2 * Math.PI * 7000 * t + 1.1));
+                Buffer.BlockCopy(BitConverter.GetBytes(left), 0, buffer, i * 8, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(right), 0, buffer, i * 8 + 4, 4);
+            }
+            return buffer;
+        }
+
+        private static byte[] CreateStereoPcm16Tone(int sampleRate, double seconds)
+        {
+            int frames = (int)(sampleRate * seconds);
+            byte[] buffer = new byte[frames * 4];
+            for (int i = 0; i < frames; i++)
+            {
+                double t = i / (double)sampleRate;
+                short left = (short)(Math.Sin(2 * Math.PI * 440 * t) * 5000);
+                short right = (short)(Math.Sin(2 * Math.PI * 660 * t) * 5000);
+                buffer[i * 4] = (byte)(left & 0xff);
+                buffer[i * 4 + 1] = (byte)((left >> 8) & 0xff);
+                buffer[i * 4 + 2] = (byte)(right & 0xff);
+                buffer[i * 4 + 3] = (byte)((right >> 8) & 0xff);
+            }
+            return buffer;
+        }
+
+        private static double AverageAbsDiff(byte[] a, byte[] b)
+        {
+            if (a == null || b == null || a.Length == 0 || b.Length == 0) return 0;
+            int samples = Math.Min(a.Length, b.Length) / 2;
+            long total = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                short av = BitConverter.ToInt16(a, i * 2);
+                short bv = BitConverter.ToInt16(b, i * 2);
+                total += Math.Abs(av - bv);
+            }
+            return total / (double)samples;
+        }
+
+        private static int ParseInt(string text, int fallback)
+        {
+            int parsed;
+            return int.TryParse(text, out parsed) ? parsed : fallback;
+        }
     }
 
     internal sealed class WaveFormat
