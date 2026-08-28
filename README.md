@@ -14,6 +14,7 @@ Source details used from <https://magic.audio/company/about/>, <https://magic.au
 
 - Windows desktop audio capture through WASAPI loopback.
 - Optional processed monitor playback through the default Windows audio output. This is off by default to prevent feedback when capturing and playing through the same device.
+- Built-in processed test tone so Magic/PEQ sliders and presets can be heard without creating a feedback loop.
 - Tabbed interface:
   - **Magic acoustics** keeps the Magic Audio spatial signature controls.
   - **PEQ System** adds PEQApp-derived parametric EQ controls.
@@ -87,6 +88,29 @@ bin\WindowsPEQApp.exe
 ```
 
 Start any system audio first, then press **Start desktop audio** in the app.
+
+## How To Hear Changes
+
+Browser extensions change tab audio inside the browser. This Windows app captures desktop playback and creates a processed path beside it; it cannot silently overwrite the already-playing Windows output without a virtual audio endpoint.
+
+For a quick no-feedback check:
+
+1. Move any Magic acoustics slider or apply a PEQ/AutoEQ preset.
+2. Press **Test processed tone**.
+3. Change the sliders again and press **Test processed tone** again to hear the current processed signature.
+
+To audition live music:
+
+1. Start music in Edge, Chrome, YouTube Music, Spotify, or another app.
+2. Press **Start desktop audio**.
+3. Turn on **Audition processed audio**.
+4. Use headphones, a second output device, or virtual audio routing. If you audition through the same speakers being captured, Windows can feed the processed signal back into the capture stream and create noise; the app will turn audition off if that loop gets too loud.
+
+For full desktop replacement:
+
+1. Route Windows playback into a virtual audio cable/device.
+2. Capture that virtual device in this app.
+3. Play the processed output to your real speakers/headphones.
 
 To match the extension while Edge is playing:
 

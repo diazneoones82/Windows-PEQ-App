@@ -34,6 +34,7 @@ namespace MagicAudioDesktop
         private readonly Button startButton;
         private readonly Button stopButton;
         private readonly Button scanButton;
+        private readonly Button testToneButton;
         private readonly Label statusLabel;
         private readonly MeterPanel meterPanel;
         private readonly TrackBar volumeSlider;
@@ -189,10 +190,10 @@ namespace MagicAudioDesktop
 
             monitorOutputCheckBox = new CheckBox
             {
-                Text = "Play processed monitor output",
+                Text = "Audition processed audio",
                 Checked = false,
                 Location = new Point(18, 54),
-                Size = new Size(270, 28),
+                Size = new Size(214, 28),
                 ForeColor = ThemeText
             };
             monitorOutputCheckBox.CheckedChanged += MonitorOutputCheckBox_CheckedChanged;
@@ -200,11 +201,20 @@ namespace MagicAudioDesktop
             magicSignatureButton = new Button
             {
                 Text = "Magic acoustics",
-                Location = new Point(306, 52),
+                Location = new Point(262, 52),
                 Size = new Size(132, 30),
                 FlatStyle = FlatStyle.Flat
             };
             magicSignatureButton.Click += MagicSignatureButton_Click;
+
+            testToneButton = new Button
+            {
+                Text = "Test processed tone",
+                Location = new Point(32, 166),
+                Size = new Size(190, 34),
+                FlatStyle = FlatStyle.Flat
+            };
+            testToneButton.Click += TestToneButton_Click;
 
             magicControlsPanel.Controls.Add(modeLabel);
             magicControlsPanel.Controls.Add(listeningModeCombo);
@@ -237,6 +247,7 @@ namespace MagicAudioDesktop
             Controls.Add(startButton);
             Controls.Add(stopButton);
             Controls.Add(scanButton);
+            Controls.Add(testToneButton);
             Controls.Add(statusLabel);
             Controls.Add(meterPanel);
             Controls.Add(magicControlsPanel);
@@ -342,7 +353,8 @@ namespace MagicAudioDesktop
             startButton.SetBounds(margin, 116, 190, 42);
             stopButton.SetBounds(margin + 206, 116, 110, 42);
             scanButton.SetBounds(margin + 332, 116, 190, 42);
-            statusLabel.SetBounds(margin, 176, Math.Max(420, rightX - margin - 28), 42);
+            testToneButton.SetBounds(margin, 172, 190, 34);
+            statusLabel.SetBounds(margin + 206, 170, Math.Max(300, rightX - margin - 234), 42);
             meterPanel.SetBounds(margin, 238, Math.Max(410, rightX - margin - 80), 230);
             magicControlsPanel.SetBounds(rightX, panelTop, rightWidth, panelHeight);
             magicNoteLabel.SetBounds(margin, Math.Max(486, clientHeight - 92), clientWidth - margin * 2, 64);
@@ -604,12 +616,63 @@ namespace MagicAudioDesktop
         private void Sliders_Changed(object sender, EventArgs e)
         {
             ApplyProcessorSettings();
+            if (!monitorOutputCheckBox.Checked)
+            {
+                statusLabel.Text = "Settings updated. Use Test processed tone or Audition processed audio to hear them.";
+            }
         }
 
         private void MagicSignatureButton_Click(object sender, EventArgs e)
         {
             ApplyMagicAcousticsPreset();
             statusLabel.Text = "Applied Magic acoustics basic signature.";
+        }
+
+        private void TestToneButton_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ApplyProcessorSettings();
+                SyncPeqToProcessor();
+                player.Stop();
+                byte[] tone = BuildProcessedTestTone();
+                player.Play(tone, 48000);
+                statusLabel.Text = "Playing processed test tone with the current Magic/PEQ settings.";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "Could not play processed test tone: " + ex.Message;
+            }
+        }
+
+        private byte[] BuildProcessedTestTone()
+        {
+            var format = new WaveFormat
+            {
+                AudioFormat = 3,
+                Channels = 2,
+                SampleRate = 48000,
+                BitsPerSample = 32,
+                BlockAlign = 8,
+                AverageBytesPerSecond = 384000
+            };
+            byte[] input = CreateStereoFloatTestBuffer(format.SampleRate, 2.0);
+            return processor.Process(input, input.Length, format).Pcm16Stereo;
+        }
+
+        private static byte[] CreateStereoFloatTestBuffer(int sampleRate, double seconds)
+        {
+            int frames = (int)(sampleRate * seconds);
+            byte[] buffer = new byte[frames * 8];
+            for (int i = 0; i < frames; i++)
+            {
+                double t = i / (double)sampleRate;
+                float left = (float)(0.18 * Math.Sin(2 * Math.PI * 80 * t) + 0.16 * Math.Sin(2 * Math.PI * 1000 * t) + 0.11 * Math.Sin(2 * Math.PI * 9000 * t));
+                float right = (float)(0.15 * Math.Sin(2 * Math.PI * 100 * t + 0.4) + 0.13 * Math.Sin(2 * Math.PI * 1500 * t) + 0.10 * Math.Sin(2 * Math.PI * 7000 * t + 1.1));
+                Buffer.BlockCopy(BitConverter.GetBytes(left), 0, buffer, i * 8, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(right), 0, buffer, i * 8 + 4, 4);
+            }
+            return buffer;
         }
 
         private void ApplyMagicAcousticsPreset()
@@ -1019,6 +1082,10 @@ namespace MagicAudioDesktop
         private void PeqControl_Changed(object sender, EventArgs e)
         {
             SyncPeqToProcessor();
+            if (statusLabel != null && monitorOutputCheckBox != null && !monitorOutputCheckBox.Checked)
+            {
+                statusLabel.Text = "PEQ updated. Use Test processed tone or Audition processed audio to hear it.";
+            }
         }
 
         private void SyncPeqToProcessor()
