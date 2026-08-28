@@ -1065,6 +1065,7 @@ namespace MagicAudioDesktop
         {
             if (peqPresetCombo == null || peqBandsGrid == null) return;
             var profile = PeqProfile.Find((string)peqPresetCombo.SelectedItem);
+            peqEnabledCheckBox.Checked = true;
             peqPreampInput.Value = ClampDecimal((decimal)profile.PreampDb, peqPreampInput.Minimum, peqPreampInput.Maximum);
             peqBassBoostInput.Value = ClampDecimal((decimal)profile.BassBoostDb, peqBassBoostInput.Minimum, peqBassBoostInput.Maximum);
             peqLoudnessInput.Value = ClampDecimal((decimal)profile.LoudnessDb, peqLoudnessInput.Minimum, peqLoudnessInput.Maximum);
@@ -1128,6 +1129,7 @@ namespace MagicAudioDesktop
         private void ImportPeqConfig()
         {
             var parsed = PeqConfigParser.Parse(peqConfigText.Text);
+            peqEnabledCheckBox.Checked = true;
             peqPreampInput.Value = ClampDecimal((decimal)parsed.PreampDb, peqPreampInput.Minimum, peqPreampInput.Maximum);
             peqBandsGrid.Rows.Clear();
             foreach (var band in parsed.Bands)
@@ -1436,6 +1438,8 @@ namespace MagicAudioDesktop
             left = SoftClip(left * Volume);
             right = SoftClip(right * Volume);
             peqProcessor.Process(ref left, ref right);
+            left = SoftClip(left) * 0.92f;
+            right = SoftClip(right) * 0.92f;
         }
 
         private static float Compress(float sample, float amount)
@@ -2484,6 +2488,7 @@ namespace MagicAudioDesktop
     {
         private const int WaveMapper = -1;
         private const int WhdrDone = 0x00000001;
+        private const int MaxQueuedBuffers = 8;
         private IntPtr waveOut;
         private int sampleRate;
         private readonly System.Collections.Generic.List<PendingWaveBuffer> pending = new System.Collections.Generic.List<PendingWaveBuffer>();
@@ -2499,9 +2504,17 @@ namespace MagicAudioDesktop
             {
                 Stop();
                 Open(newSampleRate);
+                if (waveOut == IntPtr.Zero)
+                {
+                    return;
+                }
             }
 
             CleanupCompleted();
+            if (pending.Count >= MaxQueuedBuffers)
+            {
+                return;
+            }
 
             var pendingBuffer = new PendingWaveBuffer(pcm16Stereo);
             int result = waveOutPrepareHeader(waveOut, pendingBuffer.HeaderPointer, Marshal.SizeOf(typeof(WaveHdr)));
@@ -2578,13 +2591,6 @@ namespace MagicAudioDesktop
                     pending[i].Dispose();
                     pending.RemoveAt(i);
                 }
-            }
-
-            while (pending.Count > 12)
-            {
-                waveOutUnprepareHeader(waveOut, pending[0].HeaderPointer, Marshal.SizeOf(typeof(WaveHdr)));
-                pending[0].Dispose();
-                pending.RemoveAt(0);
             }
         }
 
