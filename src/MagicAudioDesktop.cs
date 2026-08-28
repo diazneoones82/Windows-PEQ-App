@@ -75,6 +75,7 @@ namespace MagicAudioDesktop
         private WasapiLoopbackCapture capture;
         private bool scanning;
         private DateTime scanStartedAt;
+        private int feedbackGuardFrames;
         private static readonly Color ThemeBack = Color.FromArgb(14, 16, 20);
         private static readonly Color ThemePanel = Color.FromArgb(25, 28, 35);
         private static readonly Color ThemePanelAlt = Color.FromArgb(32, 36, 45);
@@ -189,11 +190,12 @@ namespace MagicAudioDesktop
             monitorOutputCheckBox = new CheckBox
             {
                 Text = "Play processed monitor output",
-                Checked = true,
+                Checked = false,
                 Location = new Point(18, 54),
                 Size = new Size(270, 28),
                 ForeColor = ThemeText
             };
+            monitorOutputCheckBox.CheckedChanged += MonitorOutputCheckBox_CheckedChanged;
 
             magicSignatureButton = new Button
             {
@@ -560,7 +562,31 @@ namespace MagicAudioDesktop
             var result = processor.Process(e.Buffer, e.BytesRecorded, e.WaveFormat);
             if (monitorOutputCheckBox.Checked)
             {
+                if (Math.Max(result.LeftOutput, result.RightOutput) > 0.96f)
+                {
+                    feedbackGuardFrames++;
+                }
+                else
+                {
+                    feedbackGuardFrames = 0;
+                }
+
+                if (feedbackGuardFrames > 12)
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        monitorOutputCheckBox.Checked = false;
+                        statusLabel.Text = "Monitor output was turned off to prevent feedback/noise.";
+                    }));
+                    feedbackGuardFrames = 0;
+                    return;
+                }
+
                 player.Play(result.Pcm16Stereo, e.WaveFormat.SampleRate);
+            }
+            else
+            {
+                feedbackGuardFrames = 0;
             }
 
             if (IsDisposed) return;
@@ -583,7 +609,6 @@ namespace MagicAudioDesktop
         private void MagicSignatureButton_Click(object sender, EventArgs e)
         {
             ApplyMagicAcousticsPreset();
-            monitorOutputCheckBox.Checked = true;
             statusLabel.Text = "Applied Magic acoustics basic signature.";
         }
 
@@ -608,6 +633,19 @@ namespace MagicAudioDesktop
             processor.Surround = surroundSlider.Value / 100.0f;
             processor.Compression = compressionSlider.Value / 100.0f;
             processor.Mode = listeningModeCombo.SelectedIndex == 1 ? ListeningMode.Headphones : ListeningMode.Speakers;
+        }
+
+        private void MonitorOutputCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            if (monitorOutputCheckBox.Checked)
+            {
+                statusLabel.Text = "Monitor output is on. Use headphones or virtual routing to avoid feedback.";
+            }
+            else
+            {
+                player.Stop();
+                statusLabel.Text = "Monitor output is off. DSP is still applied to the processed path and meters.";
+            }
         }
 
         private void ApplyScannedProfile(ScannedProfile profile)
@@ -963,7 +1001,6 @@ namespace MagicAudioDesktop
         private void ApplySelectedPeqPreset()
         {
             if (peqPresetCombo == null || peqBandsGrid == null) return;
-            monitorOutputCheckBox.Checked = true;
             var profile = PeqProfile.Find((string)peqPresetCombo.SelectedItem);
             peqPreampInput.Value = ClampDecimal((decimal)profile.PreampDb, peqPreampInput.Minimum, peqPreampInput.Maximum);
             peqBassBoostInput.Value = ClampDecimal((decimal)profile.BassBoostDb, peqBassBoostInput.Minimum, peqBassBoostInput.Maximum);
@@ -1071,10 +1108,9 @@ namespace MagicAudioDesktop
             if (autoEqListView == null || autoEqListView.SelectedItems.Count == 0) return;
             var profile = autoEqListView.SelectedItems[0].Tag as AutoEqProfile;
             if (profile == null) return;
-            monitorOutputCheckBox.Checked = true;
             peqConfigText.Text = profile.ConfigText;
             ImportPeqConfig();
-            peqStatusLabel.Text = "Applied AutoEQ: " + profile.Name + " - monitor audition on";
+            peqStatusLabel.Text = "Applied AutoEQ: " + profile.Name;
         }
 
         private static float ToFloat(object value, float fallback)

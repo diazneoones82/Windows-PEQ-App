@@ -13,7 +13,7 @@ Source details used from <https://magic.audio/company/about/>, <https://magic.au
 ## What This Build Supports
 
 - Windows desktop audio capture through WASAPI loopback.
-- Optional processed monitor playback through the default Windows audio output.
+- Optional processed monitor playback through the default Windows audio output. This is off by default to prevent feedback when capturing and playing through the same device.
 - Tabbed interface:
   - **Magic acoustics** keeps the Magic Audio spatial signature controls.
   - **PEQ System** adds PEQApp-derived parametric EQ controls.
@@ -53,7 +53,7 @@ Browser extensions can directly modify tab audio because the browser owns that a
 - a virtual audio device/driver, or
 - routing output through a separate device.
 
-This first app is the safe user-mode foundation: it captures desktop audio, runs the enhancement pipeline locally, and can play a processed monitor stream. When monitor playback is enabled on the same device being captured, Windows will play the original audio plus the processed monitor. A later driver-backed or virtual-device build can route only the processed stream back as a Windows playback endpoint.
+This first app is the safe user-mode foundation: it captures desktop audio, runs the enhancement pipeline locally, and can play a processed monitor stream. Monitor playback is intended for headphones, a second output device, or virtual routing. When monitor playback is enabled on the same device being captured, Windows can feed the processed signal back into capture; the app includes a guard that turns monitor output off if that loop gets too loud. A later driver-backed or virtual-device build can route only the processed stream back as a Windows playback endpoint.
 
 ## DSP Source Notes
 
