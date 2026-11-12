@@ -122,3 +122,9 @@ To match the extension while Edge is playing:
 ## Extension Install
 
 The Magic.Audio web page links users to Chrome and Edge store installs. Browser stores require an interactive user approval flow, so this repository does not silently install the extension. Install it from the vendor page when you want the browser-only version, and use this app when you want Windows desktop audio capture.
+
+## License
+
+Original project code, documentation, and assets are licensed under the GNU General Public License, version 3 or (at your option) any later version (**GPL-3.0-or-later**). You may use, copy, modify, and redistribute them under those terms. See [LICENSE](LICENSE).
+
+This software is provided without any warranty. Third-party components, models, and assets retain their own licenses and copyright notices; this grant does not relicense them.
